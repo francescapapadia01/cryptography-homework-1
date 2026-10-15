@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Ethereum Cryptography – HMWK 1 and 2</title>
+<style>
+:root{--bg:#fff;--fg:#1a1a1f;--mut:#62626e;--card:#f3f3f7;--acc:#4f46e5;--bd:#d6d6de;--hi:#e11d48;color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media(prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#15151b;--fg:#ececf2;--mut:#a0a0b0;--card:#202029;--acc:#8b85ff;--bd:#383846;--hi:#fb7185;color-scheme:dark}}
+:root[data-theme="dark"]{--bg:#15151b;--fg:#ececf2;--mut:#a0a0b0;--card:#202029;--acc:#8b85ff;--bd:#383846;--hi:#fb7185;color-scheme:dark}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.55 system-ui,-apple-system,"Segoe UI",sans-serif;padding:14px;max-width:820px;margin-inline:auto}
+h1{font-size:20px;margin:4px 0 10px}h2{font-size:17px;margin:20px 0 6px}h3{font-size:15px;margin:14px 0 4px}
+.tabs{display:flex;gap:6px;margin-bottom:12px}
+.tabs button,.btn{background:var(--card);color:var(--fg);border:1px solid var(--bd);border-radius:8px;padding:8px 12px;font:inherit;cursor:pointer}
+.tabs button.on,.btn.pri{background:var(--acc);color:#fff;border-color:var(--acc)}
+.card{background:var(--card);border:1px solid var(--bd);border-radius:10px;padding:10px 12px;margin:8px 0}
+.row{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:8px 0}
+select,input{background:var(--bg);color:var(--fg);border:1px solid var(--bd);border-radius:6px;padding:6px;font:inherit}
+input[type=number]{width:70px}
+pre,.scroll{overflow-x:auto;max-width:100%}
+pre{background:var(--card);border:1px solid var(--bd);border-radius:8px;padding:8px;font:12.5px/1.45 ui-monospace,Menlo,monospace;margin:6px 0;white-space:pre}
+.mut{color:var(--mut)}.key{color:var(--hi);font-weight:600}
+table{border-collapse:collapse;font-size:13.5px;min-width:100%}td,th{border:1px solid var(--bd);padding:4px 7px;text-align:left;vertical-align:top}
+svg{max-width:100%;height:auto;display:block;margin:auto}
+.bars{display:flex;align-items:flex-end;gap:2px;height:60px;margin:4px 0}
+.bars div{flex:1;background:var(--acc);min-width:4px}
+.lab{display:flex;gap:2px;font-size:10px;color:var(--mut)}.lab span{flex:1;text-align:center}
+section{display:none}section.on{display:block}
+</style></head><body>
+<h1>Ethereum Cryptography – HMWK 1 and 2</h1>
+<div class="tabs"><button id="t1" class="on">HMWK 1 – App</button><button id="t2">HMWK 2 – Report</button></div>
+
+<section id="s1" class="on">
+<div class="card">Toy elliptic curve <b>y² = x³ + 7 (mod 17)</b>, same form as secp256k1 (y² = x³ + 7) but over a tiny field. Public key: <b>Q = k·G</b>.</div>
+<div class="row">
+ <label>Base point G <select id="gsel"></select></label>
+ <label>k <input id="k" type="number" min="1" max="1000" value="6"></label>
+ <button class="btn pri" id="run">Compute</button>
+ <button class="btn" id="anim">▶ Animate</button>
+</div>
+<div id="out"></div>
+<svg id="plot" viewBox="0 0 380 380" role="img" aria-label="Points of the curve"></svg>
+<p class="mut" id="cap" style="text-align:center;margin:4px 0">Curve points (circles). Red = result, dashed line = operands of the addition. Over a finite field the “lines” are not geometric: it is only the algebraic formula.</p>
+
+<h2>Statistical exploration</h2>
+<div class="row"><button class="btn pri" id="stat">Run experiment (k = 1…60, chosen G)</button></div>
+<div id="st"></div>
+</section>
+
+<section id="s2">
+<h2>1. Pipeline</h2>
+<pre>Mnemonic → (BIP-39) → 512-bit seed → (BIP-32/44) → private key k
+ → (secp256k1) → public key Q = kG → (Keccak-256) → 32-byte hash
+ → last 20 bytes = address → (EIP-55) → checksummed address</pre>
+<div class="scroll"><table>
+<tr><th>Standard</th><th>Role</th></tr>
+<tr><td><b>BIP-39</b></td><td>Entropy (128–256 bits) + checksum (1 bit per 32 bits of entropy), split into 11-bit groups = indices into a list of 2048 words → 12–24 words. The seed is <i>PBKDF2-HMAC-SHA512</i> (2048 iterations, salt “mnemonic”+passphrase) → 512 bits.</td></tr>
+<tr><td><b>BIP-32</b></td><td>Hierarchical deterministic wallets: HMAC-SHA512 with key “Bitcoin seed” on the seed → master key (32 bytes) + chain code (32 bytes). Children (normal or <i>hardened</i>) are derived from a parent, so one seed produces unlimited keys.</td></tr>
+<tr><td><b>BIP-44</b></td><td>Path convention: <code>m / purpose' / coin_type' / account' / change / index</code>. For Ethereum: <code>m/44'/60'/0'/0/0</code> (60 = ETH). Makes wallets interoperable.</td></tr>
+<tr><td><b>secp256k1</b></td><td>Curve y² = x³ + 7 over a 256-bit prime. Q = kG is easy; recovering k from Q (ECDLP) is not (~2¹²⁸ operations). Also used for signatures (ECDSA).</td></tr>
+<tr><td><b>Keccak-256</b></td><td>Hash: address = last 20 bytes of Keccak-256(Q without the 0x04 prefix, 64 bytes). It shortens and hides the public key until first use.</td></tr>
+<tr><td><b>EIP-55</b></td><td>Checksum hidden in letter case: compute Keccak-256 of the lowercase address (hex ASCII); the i-th alphabetic hex digit is uppercase if the i-th hash nibble is ≥ 8.</td></tr>
+</table></div>
+
+<h2>2. Concepts to distinguish</h2>
+<ul>
+<li><b>Generation vs derivation</b>: generation = creating random entropy (the mnemonic, BIP-39); derivation = deterministic computation of new keys from an existing secret (BIP-32/44). Same input → same outputs.</li>
+<li><b>Public-key cryptography</b>: a pair (k, Q) with a one-way relation; used to sign/verify (secp256k1).</li>
+<li><b>Hashing</b>: keyless fixed-length function, resistant to preimages/collisions (Keccak-256; SHA-512 inside HMAC/PBKDF2).</li>
+<li><b>Checksum</b>: redundant data to detect accidental errors; it does not protect against attackers (EIP-55, and the checksum bits of the mnemonic).</li>
+<li><b>Encoding</b>: reversible representation with no secret (hexadecimal, word list, upper/lower case). It offers no security.</li>
+</ul>
+
+<h2>3. Historical context</h2>
+<div class="scroll"><table>
+<tr><td>1977</td><td>RSA (public-key; ECC arrives in 1985)</td></tr>
+<tr><td>2001</td><td>SHA-2 / SHA-512 (NIST)</td></tr>
+<tr><td>2008–2012</td><td>Keccak designed and winner of the NIST competition (2012)</td></tr>
+<tr><td>2012</td><td>BIP-32 (HD wallets)</td></tr>
+<tr><td>2013</td><td>BIP-39 (mnemonic)</td></tr>
+<tr><td>2014</td><td>BIP-44 (multi-account paths)</td></tr>
+<tr><td>2015</td><td>SHA-3 standardized (FIPS 202); Ethereum launches with “pre-standard” Keccak</td></tr>
+<tr><td>2016</td><td>EIP-55 (upper/lower-case checksum)</td></tr>
+</table></div>
+
+<h3>SHA-2/SHA-512 vs Keccak/SHA-3</h3>
+<p>SHA-2 is built with Merkle–Damgård (iterated compression). Keccak uses a <b>sponge</b> construction with a 1600-bit permutation: a completely different design, hence independent of any attacks on SHA-2. Ethereum adopted Keccak-256 before NIST finalized SHA-3; NIST changed the padding/domain-separation byte (Keccak: <code>0x01</code>, SHA3-256: <code>0x06</code>), so the outputs differ:</p>
+<pre>Keccak-256("") = c5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470
+SHA3-256("")   = a7ffc6f8bf1ed76651c14756a061d662f580ff4de43b49fa82d80a4b80f8434a</pre>
+<p>Note: using a standard library's <code>sha3_256</code> instead of Keccak gives wrong addresses.</p>
+
+<h2>4. Why several primitives?</h2>
+<ul>
+<li><b>BIP-39/32/44</b> → key management: human backup, derivation of many accounts, interoperability.</li>
+<li><b>secp256k1</b> → private/public key relationship and signatures: only the curve gives public verification without revealing k.</li>
+<li><b>Keccak-256</b> → short (160-bit), uniform address, and an extra layer between Q and the public.</li>
+<li><b>EIP-55</b> → detect typos without changing the address format or length.</li>
+</ul>
+<p>A single algorithm cannot do everything: a hash has no public keys or signatures; an elliptic curve neither compresses nor diffuses bits; a checksum is not secure. Separation of concerns: each piece is minimal, standardized and replaceable.</p>
+
+<h2>5. Statistical properties</h2>
+<ul>
+<li>Mnemonic entropy: uniform (from a CSPRNG). 12 words = 128 bits of entropy (+4 checksum); 24 words = 256 (+8).</li>
+<li>PBKDF2/HMAC-SHA512 and Keccak: outputs indistinguishable from random, <b>avalanche effect</b> (1 input bit flips ~50% of output bits), collision resistance (160-bit address → birthday collision ~2⁸⁰).</li>
+<li>Public key kG: <b>no</b> avalanche; it has algebraic structure ((a+b)G = aG + bG). The relevant property is ECDLP hardness, not avalanche.</li>
+<li>EIP-55: ~15 letters on average → about 1 error in 2¹⁵ (roughly 30,000) goes undetected.</li>
+</ul>
+<h2>6. Suggested experiment</h2>
+<p>With MetaMask/Rabby/Rainbow etc., create a <b>test</b> wallet (never with funds or a real mnemonic): observe the word list (BIP-39), add more accounts (last index of the BIP-44 path), compare the address shown with upper/lower case (EIP-55), and confirm that the same mnemonic in another wallet reproduces the same addresses (BIP-32/44 determinism).</p>
+</section>
+
+<script>
+const P=17,B=7,m=a=>((a%P)+P)%P;
+const inv=a=>{a=m(a);for(let i=1;i<P;i++)if(a*i%P===1)return i};
+const add=(A,C)=>{if(!A)return C;if(!C)return A;
+ if(A[0]===C[0]&&m(A[1]+C[1])===0)return null;
+ const l=A[0]===C[0]?m(3*A[0]*A[0]*inv(2*A[1])):m((C[1]-A[1])*inv(C[0]-A[0]));
+ const x=m(l*l-A[0]-C[0]);return [x,m(l*(A[0]-x)-A[1])]};
+const pts=[];for(let x=0;x<P;x++)for(let y=0;y<P;y++)if(m(y*y)===m(x**3+B))pts.push([x,y]);
+const f=p=>p?`(${p[0]}, ${p[1]})`:'O (infinity)';
+const ordr=G=>{let R=G,n=1;while(R){R=add(R,G);n++}return n};
+const $=id=>document.getElementById(id);
+const gs=$('gsel');pts.forEach((p,i)=>{const o=document.createElement('option');o.value=i;o.textContent=f(p)+' · order '+ordr(p);gs.appendChild(o)});
+gs.value=pts.findIndex(p=>p[0]===1&&p[1]===5);
+const G=()=>pts[+gs.value];
+function dbl(k,G){let R=null,log=[];for(const b of k.toString(2)){R=add(R,R);log.push('double → '+f(R));if(b==='1'){R=add(R,G);log.push('  + G → '+f(R))}}return{R,log}}
+function plot(a,b,c){let s='';const X=x=>20+x*20,Y=y=>360-y*20;
+ for(let i=0;i<P;i++){s+=`<line x1="${X(i)}" y1="${Y(0)}" x2="${X(i)}" y2="${Y(16)}" stroke="var(--bd)" stroke-width=".5"/><line x1="${X(0)}" y1="${Y(i)}" x2="${X(16)}" y2="${Y(i)}" stroke="var(--bd)" stroke-width=".5"/>`;
+  if(i%4===0)s+=`<text x="${X(i)}" y="376" font-size="9" fill="var(--mut)" text-anchor="middle">${i}</text><text x="8" y="${Y(i)+3}" font-size="9" fill="var(--mut)">${i}</text>`}
+ if(a&&b)s+=`<line x1="${X(a[0])}" y1="${Y(a[1])}" x2="${X(b[0])}" y2="${Y(b[1])}" stroke="var(--acc)" stroke-dasharray="4 3"/>`;
+ pts.forEach(p=>s+=`<circle cx="${X(p[0])}" cy="${Y(p[1])}" r="4" fill="none" stroke="var(--fg)"/>`);
+ [a,b].forEach(p=>p&&(s+=`<circle cx="${X(p[0])}" cy="${Y(p[1])}" r="5" fill="var(--acc)"/>`));
+ if(c)s+=`<circle cx="${X(c[0])}" cy="${Y(c[1])}" r="6" fill="var(--hi)"/>`;
+ $('plot').innerHTML=s}
+let timer;
+function run(){clearInterval(timer);const g=G(),k=Math.max(1,Math.min(1000,+$('k').value||1)),n=ordr(g);
+ let R=null,L=[];for(let i=1;i<=k&&i<=60;i++){R=add(R,g);L.push(`${i}G = ${f(R)}`)}
+ let Q=null;for(let i=1;i<=k;i++)Q=add(Q,g);
+ const d=dbl(k,g);
+ $('out').innerHTML=`<div class="card">G = ${f(g)} · order of G = <b>${n}</b> · k = ${k}<br>TOY PUBLIC KEY Q = kG = <span class="key">${f(Q)}</span><br><span class="mut">With double-and-add: ${f(d.R)} ${d.R&&Q&&d.R[0]===Q[0]&&d.R[1]===Q[1]||(!d.R&&!Q)?'✔ same':'✘'}. Only k mod ${n} matters: k=${k} is equivalent to ${k%n}.</span></div>
+ <pre>${L.join('\n')}${k>60?'\n… (first 60 shown)':''}</pre><h3>Double-and-add (k = ${k.toString(2)} in binary)</h3><pre>${d.log.join('\n')}</pre>`;
+ plot(null,null,Q)}
+$('run').onclick=run;
+$('anim').onclick=()=>{clearInterval(timer);const g=G(),k=Math.min(+$('k').value||1,60);let i=1,R=g;plot(null,g,g);$('cap').textContent='1G = '+f(g);
+ timer=setInterval(()=>{if(i>=k||!R){clearInterval(timer);return}const prev=R;R=add(R,g);i++;plot(g,prev,R);$('cap').textContent=`${i}G = G + ${i-1}G = ${f(g)} + ${f(prev)} = ${f(R)}`},900)};
+const bits=(v,n)=>{let c=0;for(let i=0;i<n;i++)c+=(v>>i)&1;return c};
+$('stat').onclick=()=>{const g=G(),n=ordr(g),N=60,pt=[];for(let k=0;k<=127;k++){let R=null;for(let i=0;i<(k%n);i++)R=add(R,g);pt[k]=R}
+ const ok=[];for(let k=1;k<=N;k++)if(pt[k])ok.push(k);
+ const fx=Array(P).fill(0),fy=Array(P).fill(0);ok.forEach(k=>{fx[pt[k][0]]++;fy[pt[k][1]]++});
+ const bar=a=>{const mx=Math.max(...a,1);return`<div class="bars">${a.map(v=>`<div style="height:${v/mx*100}%"></div>`).join('')}</div><div class="lab">${a.map((_,i)=>`<span>${i}</span>`).join('')}</div>`};
+ const bx=[0,1,2,3,4].map(b=>(ok.filter(k=>(pt[k][0]>>b)&1).length/ok.length).toFixed(2));
+ const by=[0,1,2,3,4].map(b=>(ok.filter(k=>(pt[k][1]>>b)&1).length/ok.length).toFixed(2));
+ const mean=a=>a.reduce((s,v)=>s+v,0)/a.length,mk=mean(ok),mxv=mean(ok.map(k=>pt[k][0]));
+ const cor=ok.reduce((s,k)=>s+(k-mk)*(pt[k][0]-mxv),0)/Math.sqrt(ok.reduce((s,k)=>s+(k-mk)**2,0)*ok.reduce((s,k)=>s+(pt[k][0]-mxv)**2,0)||1);
+ let tot=0,cnt=0,same=0;for(let k=1;k<=63;k++)for(let b=0;b<6;b++){const k2=k^(1<<b);if(k2<1||k2>127)continue;const A=pt[k],C=pt[k2];if(!A||!C)continue;const d=bits(A[0]^C[0],5)+bits(A[1]^C[1],5);tot+=d;cnt++;if(!d)same++}
+ const a=3,b=5,h=add(pt[a%n]||null,pt[b%n]||null),w=pt[(a+b)%n];
+ $('st').innerHTML=`<div class="card"><b>Periodicity</b>: k·G repeats every ${n} steps, so there are only ${n-1} non-trivial public keys (tiny key space: an attacker tries everything instantly).</div>
+ <h3>Frequency of the x coordinate (k=1…${N})</h3>${bar(fx)}<h3>Frequency of y</h3>${bar(fy)}
+ <p class="mut">With ${n} points in the subgroup, each value appears equally often <i>inside the subgroup</i>, but many x/y values (0…16) never appear: the points do not cover the field uniformly.</p>
+ <div class="card"><b>Bits set to 1</b> (bits 0…4) → x: ${bx.join(' · ')} | y: ${by.join(' · ')} <span class="mut">(ideal 0.50)</span><br>
+ <b>Pearson correlation</b> k↔x: ${cor.toFixed(3)} <span class="mut">(≈0 ideal; here k and x are linked only by the group structure)</span><br>
+ <b>Avalanche</b> (flip 1 bit of k): average bits changed in (x,y) = ${(tot/cnt).toFixed(2)} out of 10 (hash ideal ≈ 5); in ${(same/cnt*100).toFixed(0)}% of cases the point does not change.<br>
+ <b>Homomorphism</b>: ${a}G + ${b}G = ${f(h)} ${h&&w&&h[0]===w[0]&&h[1]===w[1]?'=':'≠'} ${a+b}G = ${f(w)}. A hash never has this property.</div>
+ <h3>Discussion</h3><ul>
+ <li><b>Meaningful for a public-key one-way function</b>: hardness of the ECDLP (k from Q), determinism, efficient forward computation (double-and-add, O(log k)), no shortcuts (any usable correlation must not be exploitable).</li>
+ <li><b>Typical of cryptographic hashes</b>: avalanche effect, uniformity of output bits, collision and second-preimage resistance, fixed-length output for arbitrary input, no algebraic structure.</li>
+ <li><b>Here</b>: avalanche and uniformity do <b>not</b> hold (and are not required): kG is algebraically structured and invertible with the right key (signatures!). In the toy curve inversion is trivial; on secp256k1 the best algorithm (Pollard's rho) costs ~2¹²⁸.</li></ul>`};
+const tabs=['1','2'];tabs.forEach(t=>$('t'+t).onclick=()=>{tabs.forEach(u=>{$('t'+u).classList.toggle('on',u===t);$('s'+u).classList.toggle('on',u===t)})});
+run();
+</script></body></html>
